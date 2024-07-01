@@ -1,7 +1,10 @@
 import numpy as np
 import time
+import bpy
+import os
 
 from texturecompactor import settings
+from texturecompactor import pro
 
 # TODO: 16/32 bit float images
 # TODO: image sequence support
@@ -9,6 +12,7 @@ from texturecompactor import settings
 # TODO: persistent data storage and file loading handler
 # TODO: better packed image handling
 # TODO: eevee support via dxt compression??
+# TODO: option to exluce env
 
 
 class ImageInfo:
@@ -19,8 +23,12 @@ class ImageInfo:
         self.sharpness_factor = 100
         self.color_factor = 100
         self.alpha_factor = 100
+        self.range_factor = 0
         self.size_original_mb = 0
         self.size_optimized_mb = 0
+        self.optimized_resolution = None
+        self.optimized_depth = None
+        self.use_16bit = False
 
 
 def is_optimized(image_list):
@@ -82,25 +90,33 @@ def analyze_rgba(pixel_data):
     color_factor = np.max(diff_rg) + np.max(diff_rb) + np.max(diff_gb)
     alpha_factor = not np.all(alpha == 1.0)
 
-    return color_factor, alpha_factor
+    # tally up the unique colors
+    # unique_colors = np.unique(pixel_data.reshape(-1, 4), axis=0)
+    # range_factor = len(unique_colors)
+    range_factor = 0
+
+    return color_factor, alpha_factor, range_factor
 
 
-def optimize_sharpness(img_info, settings, execute=False):
+def optimize_size(img_info, settings, execute=False):
     smart_resize = float(settings["smart_resize"])
 
     if img_info.sharpness_factor < 0.1 * smart_resize:
         img_info.size_optimized_mb /= 64
+        img_info.optimized_resolution = [img_info.image.size[0] // 8, img_info.image.size[1] // 8]
         print(f"Resizable to 1/8th {img_info.image.name}")
-    elif img_info.sharpness_factor < 0.2 * smart_resize:
+    elif img_info.sharpness_factor < 0.15 * smart_resize:
         img_info.size_optimized_mb /= 16
+        img_info.optimized_resolution = [img_info.image.size[0] // 4, img_info.image.size[1] // 4]
         print(f"Resizable to 1/4th {img_info.image.name}")
-    elif img_info.sharpness_factor < 0.4 * smart_resize:
+    elif img_info.sharpness_factor < 0.3 * smart_resize:
         img_info.size_optimized_mb /= 4
+        img_info.optimized_resolution = [img_info.image.size[0] // 2, img_info.image.size[1] // 2]
         print(f"Resizable to 1/2 {img_info.image.name}")
     return img_info
 
 
-def optimize_rgba(img_info, settings, execute=False):
+def optimize_depth(img_info, settings, execute=False):
     convert_greyscale = float(settings["convert_greyscale"])
     optimize_float = float(settings["optimize_float"])
     depth = img_info.image.depth
@@ -112,16 +128,37 @@ def optimize_rgba(img_info, settings, execute=False):
         # print(img_info.color_factor, img_info.image.name)
         if img_info.color_factor < 0.1 * convert_greyscale:
             # make into 8bit greyscale
-            print(f"Compressable {img_info.image.name}")
+            print(f"To 8bit >> {img_info.image.name}")
             img_info.size_optimized_mb /= 3  # 24bit/8bit = 3
+            img_info.optimized_depth = 8
         else:
             # compress to dxt1
             # print(f"Compressable to DXT1 {img.name}")
             # size_optimized_mb = size_optimized_mb / 6  # Approximate DXT1 compression ratio
             pass
+    elif depth == 32:
+        # check alpha is constant
+        if img_info.alpha_factor < 0.5 * convert_greyscale:
+            if img_info.color_factor < 0.1 * convert_greyscale:
+                # make into 8bit greyscale
+                print(f"To 8bit >> {img_info.image.name}")
+                img_info.size_optimized_mb /= 4
+                img_info.optimized_depth = 8
+            else:
+                # remove constant alpha
+                print(f"Removing alpha > {img_info.image.name}")
+                img_info.size_optimized_mb -= img_info.size_optimized_mb / 4
+                img_info.optimized_depth = 24
+
+    elif depth == 128:
+        if optimize_float >= 1:
+            # use to half precision if not already
+            if not img_info.image.use_half_precision:
+                img_info.size_optimized_mb /= 2
+                img_info.use_16bit = True
 
     else:
-        print(f"Unknown bit depth {depth} for {img_info.image.name}")
+        print(f"Cannot handle bit depth {depth} for {img_info.image.name}")
 
     return img_info
 
@@ -158,14 +195,13 @@ def scan_image(img):
 
     # calculate sharpness for smart resize
     peak_sharpness = analyze_sharpness(pixel_data)
-    # print(f"sharpness: {peak_sharpness} {img.name}")
     img_info.sharpness_factor = peak_sharpness
 
     # calculate rgb and alpha value for smart conversion
-    color_factor, alpha_factor = analyze_rgba(pixel_data)
+    color_factor, alpha_factor, range_factor = analyze_rgba(pixel_data)
     img_info.color_factor = color_factor
     img_info.alpha_factor = alpha_factor
-    # print(f"Color: {color_factor} Alpha: {alpha_factor} {img.name}")
+    img_info.range_factor = range_factor
 
     return img_info
 
@@ -173,6 +209,7 @@ def scan_image(img):
 def update_memory_usage(self, context):
     """Update the memory usage for each image in the list."""
 
+    print("---")
     settings = {
         "convert_greyscale": context.scene.TC_convert_greyscale,
         "smart_resize": context.scene.TC_smart_resize,
@@ -181,8 +218,20 @@ def update_memory_usage(self, context):
 
     for img_info in context.scene.TC_texture_metadata:
         img_info = compute_image_size(img_info)
-        img_info = optimize_sharpness(img_info, settings)
-        img_info = optimize_rgba(img_info, settings)
+        img_info = optimize_size(img_info, settings)
+        img_info = optimize_depth(img_info, settings)
+
+
+def optimize_images(self, context):
+    """Optimize all textures in the list."""
+    settings = {
+        "convert_greyscale": context.scene.TC_convert_greyscale,
+        "smart_resize": context.scene.TC_smart_resize,
+        "optimize_float": context.scene.TC_optimize_float,
+    }
+
+    for img_info in context.scene.TC_texture_metadata:
+        pro.optimize(img_info)
 
 
 def generate_html_report(image_info_list, show_optimized=True):
@@ -231,12 +280,18 @@ def generate_html_report(image_info_list, show_optimized=True):
             width: 10%;
         }}
         th:nth-child(3) {{
-            width: 20%;
-        }}
-        th:nth-child(4) {{
             width: 10%;
         }}
+        th:nth-child(4) {{
+            width: 15%;
+        }}
         th:nth-child(5) {{
+            width: 15%;
+        }}
+        th:nth-child(6) {{
+            width: 10%;
+        }}
+        th:nth-child(7) {{
             width: 10%;
         }}
         .optimized {{
@@ -249,6 +304,29 @@ def generate_html_report(image_info_list, show_optimized=True):
         .toggle-button {{
             margin: 20px;
             text-align: center;
+        }}
+        .thumbnail {{
+            position: relative;
+            display: inline-block;
+        }}
+        .thumbnail:hover .thumbnail-image {{
+            visibility: visible;
+        }}
+        .thumbnail-image {{
+            visibility: hidden;
+            position: absolute;
+            z-index: 1;
+            width: 200px;
+            height: auto;
+            top: -10px;
+            left: 105%;
+            border: 1px solid #ddd;
+            background-color: white;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            background-image: linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc),
+                              linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 10px;
         }}
     </style>
     <script>
@@ -289,8 +367,10 @@ def generate_html_report(image_info_list, show_optimized=True):
         <thead>
             <tr>
                 <th>Image Name</th>
-                <th>Bit Depth</th>
-                <th>Resolution</th>
+                <th>Original Bit Depth</th>
+                <th>New Bit Depth</th>
+                <th>Original Resolution</th>
+                <th>New Resolution</th>
                 <th>Texture Memory (MB)</th>
                 <th>Optimized Memory (MB)</th>
             </tr>
@@ -309,11 +389,16 @@ def generate_html_report(image_info_list, show_optimized=True):
     row_template = """
 <tr class="image-row {highlight}">
     <td title="{filepath}" style="text-align: left;">
-        {name}
+        <div class="thumbnail">
+            {name}
+            <img src="file://{filepath}" class="thumbnail-image" alt="{name}">
+        </div>
         <span class="copy-icon" style="text-align: right;" onclick="copyToClipboard('{filepath}')">⧉</span>
     </td>
-    <td>{bit_depth}</td>
-    <td>{resolution}</td>
+    <td>{original_bit_depth}</td>
+    <td>{new_bit_depth}</td>
+    <td>{original_resolution}</td>
+    <td>{new_resolution}</td>
     <td style="width: 150px;">
         <div style="width: 100%; height: 18px; display: flex; justify-content: space-between;">
             <div style="background-color: #eee; height:100%; width:{size_percentage:.2f}%"></div>
@@ -334,16 +419,17 @@ def generate_html_report(image_info_list, show_optimized=True):
     rows = ""
     for info in all_images_sorted:
         original_resolution = f"{info.image.size[0]}x{info.image.size[1]}"
-        resolution = original_resolution
+        new_resolution = f"{info.optimized_resolution[0]}x{info.optimized_resolution[1]}" if info.optimized_resolution else original_resolution
 
         if info.image.is_float and info.image.use_half_precision:
-            bit_depth = f'<span title="Half float">{info.image.depth // 2}bit *&nbsp;</span>'
-        elif info.image.is_float and not info.image.use_half_precision:
-            bit_depth = f'<span title="Full float">{info.image.depth}bit **</span>'
+            original_bit_depth = f"{info.image.depth}bit(½)"
         else:
-            bit_depth = f"{info.image.depth}bit &nbsp;&nbsp;"
-        if info.color_factor < 0.1:
-            bit_depth = f"{info.image.depth}bit >> 8bit &nbsp;&nbsp;"
+            original_bit_depth = f"{info.image.depth}bit"
+
+        if info.image.is_float and info.use_16bit:
+            new_bit_depth = f"{info.optimized_depth}bit(½)" if info.optimized_depth else f"{info.image.depth}bit(½)"
+        else:
+            new_bit_depth = f"{info.optimized_depth}bit" if info.optimized_depth else f"{info.image.depth}bit"
 
         if info.image.packed_file:
             name = f'<span title="Cannot optimize packed images">🔒{info.image.name}</span>'
@@ -352,11 +438,13 @@ def generate_html_report(image_info_list, show_optimized=True):
         size_percentage = int((info.size_original_mb / total_before) * 100)
         rows += row_template.format(
             name=name,
-            filepath=info.image.filepath_raw.replace("\\", "\\\\"),  # Escape backslashes for JavaScript
+            filepath=os.path.abspath(bpy.path.abspath(info.image.filepath_raw, library=info.image.library)).replace("\\", "\\\\"),  # Escape backslashes for JavaScript
             size_original=info.size_original_mb,
             size_optimized=info.size_optimized_mb,
-            bit_depth=bit_depth,
-            resolution=resolution,
+            original_bit_depth=original_bit_depth,
+            new_bit_depth=new_bit_depth,
+            original_resolution=original_resolution,
+            new_resolution=new_resolution,
             highlight="optimized" if info in optimized_images else "",
             size_percentage=size_percentage,
         )

@@ -1,59 +1,49 @@
 from texturecompactor import settings
+import bpy
 
 
-def optimize_imgs(image_list):
-    for img in image_list:
-        if img.to_grey:
-            print(f"Converting {img.image.name} to 8-bit greyscale")
-            convert_to_greyscale_8bit(img.image)
-        elif img.to_dxt1 and False:
-            print(f"Converting {img.image.name} to DXT1")
-            convert_to_dxt1(img.image)
+def optimize(img_info):
+    image = img_info.image
 
-    return True
+    if img_info.optimized_resolution:
+        width = image.size[0]
+        height = image.size[1]
 
+        new_width = max(2, img_info.optimized_resolution[0])
+        new_height = max(2, img_info.optimized_resolution[1])
 
-def convert_to_greyscale_8bit(image):
-    """Convert the given image to an 8-bit grayscale PNG."""
-    # Save the original settings
-    colorspace_original = image.colorspace_settings.name
-    image.colorspace_settings.name = "Non-Color"
+        image.scale(new_width, new_height)
+        print(f"Resized {image.name} to {new_width}x{new_height}")
 
-    # get file extension of filepath
-    filepath_original = image.filepath_raw
-    ext = filepath_original.split(".")[-1]
-    filepath_new = filepath_original.replace(ext, "8bit.png")
+    elif img_info.optimized_depth:
+        # Save the original settings
+        colorspace_original = image.colorspace_settings.name
+        image.colorspace_settings.name = "Non-Color"
 
-    # deal with library assets
-    filepath_new = bpy.path.abspath(filepath_new, library=image.library)
+        # get file extension of filepath
+        filepath_original = image.filepath_raw
+        ext = filepath_original.split(".")[-1]
+        filepath_new = filepath_original.replace(ext, "optimized1.png")
 
-    scene = bpy.context.scene
-    # scene.view_settings.view_transform = "Standard"
-    scene.render.image_settings.file_format = "PNG"
-    scene.render.image_settings.color_mode = "BW"
-    scene.render.image_settings.color_depth = "8"
-    scene.render.image_settings.compression = 15
+        # deal with library assets
+        filepath_new = bpy.path.abspath(filepath_new, library=image.library)
 
-    image.save_render(bpy.path.abspath(filepath_new), scene=scene)
+        scene = bpy.context.scene
+        # scene.view_settings.view_transform = "Standard"
+        scene.render.image_settings.file_format = "PNG"
+        scene.render.image_settings.color_mode = "BW"
+        scene.render.image_settings.color_depth = "8"
+        scene.render.image_settings.compression = 15
 
-    # replace image with new file
-    image.filepath_raw = filepath_new
-    image.colorspace_settings.name = colorspace_original
+        image.save_render(bpy.path.abspath(filepath_new), scene=scene)
 
-    return image
+        # replace image with new file
+        image.filepath_raw = filepath_new
+        image.colorspace_settings.name = colorspace_original
 
+        img_info.optimized_path = filepath_new
 
-def resize_image(image, scale_factor):
-    """Resize the image by a given scale factor."""
-    width = image.size[0]
-    height = image.size[1]
-
-    new_width = max(2, int(width / scale_factor))
-    new_height = max(2, int(height / scale_factor))
-
-    image.scale(new_width, new_height)
-    print(f"Resized {image.name} to {new_width}x{new_height}")
-    return image
+        img_info.image.reload()
 
 
 def convert_to_dxt1(image):

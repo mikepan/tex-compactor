@@ -4,7 +4,6 @@ import concurrent.futures
 import bpy
 
 from texturecompactor import core
-from texturecompactor import pro
 
 
 class TEXTURECOMPACTOR_PT_main_panel(bpy.types.Panel):
@@ -17,6 +16,7 @@ class TEXTURECOMPACTOR_PT_main_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
+        layout.use_property_decorate = False
         scene = context.scene
 
         has_data = bool(context.scene.TC_texture_metadata)
@@ -71,6 +71,13 @@ class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
     bl_label = "Scan All Textures"
     bl_idname = "texture_compactor.scan_textures"
     bl_description = "Scan all textures in the scene and look for optimization opportunities"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+
+    _timer = None
+    _executor = None
+    _futures = None
+    _progress = 0
+    _total_images = 0
 
     def scan_image(self, img):
         # Skip non-pixel types like viewer nodes or render result
@@ -99,33 +106,59 @@ class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
         # Do the actual scan and return the metadata
         return core.scan_image(img)
 
+    def modal(self, context, event):
+        wm = context.window_manager
+        if event.type == "TIMER":
+            if self._futures:
+                done, not_done = concurrent.futures.wait(self._futures, timeout=0, return_when=concurrent.futures.FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        img_info = future.result()
+                        if img_info is not None:
+                            context.scene.TC_texture_metadata.append(img_info)
+                    except Exception as exc:
+                        print(f"Exception during scanning: {exc}")
+                    self._futures.remove(future)
+                    self._progress += 1
+
+                # Update the progress bar
+                progress_percentage = (self._progress / self._total_images) * 100
+                wm.progress_update(self._progress)
+                self.report({"INFO"}, f"Scanning progress: {self._progress}/{self._total_images} ({int(progress_percentage)}%)")
+
+                if not self._futures:  # Only shut down if all futures are done
+                    self._executor.shutdown(wait=False)
+                    context.window_manager.event_timer_remove(self._timer)
+                    self.report({"INFO"}, "Scanning completed.")
+
+                    core.update_memory_usage(self, context)
+                    wm.progress_end()
+                    return {"FINISHED"}
+
+        return {"PASS_THROUGH"}
+
     def execute(self, context):
         start = time.time()
-
         context.scene.TC_texture_metadata.clear()
 
-        # Create a thread pool
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Submit tasks for each image
-            future_to_img = {executor.submit(self.scan_image, img): img for img in bpy.data.images}
+        self._executor = concurrent.futures.ThreadPoolExecutor()
+        self._futures = [self._executor.submit(self.scan_image, img) for img in bpy.data.images]
+        self._total_images = len(self._futures)
 
-            # Collect results as they complete
-            for future in concurrent.futures.as_completed(future_to_img):
-                img = future_to_img[future]
-                try:
-                    img_info = future.result()
-                    if img_info is not None:
-                        context.scene.TC_texture_metadata.append(img_info)
-                except Exception as exc:
-                    print(f"{img} generated an exception: {exc}")
+        wm = context.window_manager
+        wm.progress_begin(0, self._total_images)
+        self._timer = wm.event_timer_add(0.5, window=context.window)
+        wm.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
 
-        end = time.time()
-        print(f"Scanning took {end - start:.1f} seconds")
-
-        # Update estimated memory usage
-        core.update_memory_usage(self, context)
-
-        return {"FINISHED"}
+    def cancel(self, context):
+        if self._executor:
+            self._executor.shutdown(wait=False)
+        if self._timer:
+            context.window_manager.event_timer_remove(self._timer)
+        context.window_manager.progress_end()
+        self.report({"INFO"}, "Scanning canceled.")
+        return {"CANCELLED"}
 
 
 class TEXTURECOMPACTOR_OT_optimize_textures(bpy.types.Operator):
@@ -134,7 +167,9 @@ class TEXTURECOMPACTOR_OT_optimize_textures(bpy.types.Operator):
     bl_description = "Optimize all textures used in the scene using the settings above"
 
     def execute(self, context):
-        pro.optimize_textures(self, context)
+        core.update_memory_usage(self, context)
+        core.optimize_images(self, context)
+        core.update_memory_usage(self, context)
         return {"FINISHED"}
 
 

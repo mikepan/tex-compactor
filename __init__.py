@@ -36,7 +36,17 @@ classes = (
 )
 
 
+@bpy.app.handlers.persistent
+def clear_addon_data(dummy):
+    # Clear or reset your addon data here
+    print("New file loaded, clearing addon data...")
+    bpy.context.scene.TC_texture_metadata.clear()
+    bpy.context.scene.TC_texture_metadata = []
+
+
 def register():
+    bpy.app.handlers.load_post.append(clear_addon_data)
+
     for cls in classes:
         bpy.utils.register_class(cls)
 
@@ -48,6 +58,7 @@ def register():
         ],
         name="Convert to Greyscale",
         default="1",
+        options=set(),
         update=core.update_memory_usage,
     )
 
@@ -55,10 +66,11 @@ def register():
         items=[
             ("0", "Off", "Do nothing"),
             ("1", "Safe", "Optimize when there is no visible difference"),
-            ("2", "Aggressive", "Use a higher tolerance to find more images that can be resized safely"),
+            ("2", "Aggressive", "Use a higher tolerance to find more textures that can be resized safely"),
         ],
         name="Smart Resize",
         default="1",
+        options=set(),
         update=core.update_memory_usage,
     )
 
@@ -70,12 +82,14 @@ def register():
         ],
         name="Float Textures",
         default="1",
+        options=set(),
         update=core.update_memory_usage,
     )
 
     bpy.types.Scene.TC_texture_swap = bpy.props.EnumProperty(
         items=[("0", "Original", "Use original textures"), ("1", "Optimized", "Use optimized textures")],
         name="Switch Textures",
+        options=set(),
         default="0",
     )
 
@@ -83,11 +97,13 @@ def register():
 
 
 def unregister():
+    bpy.app.handlers.load_post.remove(clear_addon_data)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
     del bpy.types.Scene.TC_convert_greyscale
     del bpy.types.Scene.TC_smart_resize
+    del bpy.types.Scene.TC_optimize_float
     del bpy.types.Scene.TC_texture_swap
     del bpy.types.Scene.TC_texture_metadata
 
