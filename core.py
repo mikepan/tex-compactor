@@ -3,6 +3,7 @@ import time
 import bpy
 import os
 
+from texturecompactor import web
 from texturecompactor import settings
 from texturecompactor import pro
 
@@ -12,7 +13,6 @@ from texturecompactor import pro
 # TODO: persistent data storage and file loading handler
 # TODO: better packed image handling
 # TODO: eevee support via dxt compression??
-# TODO: option to exluce env
 
 
 class ImageInfo:
@@ -28,7 +28,7 @@ class ImageInfo:
         self.size_optimized_mb = 0
         self.optimized_resolution = None
         self.optimized_depth = None
-        self.use_16bit = False
+        self.read_as_half_precision = False
 
 
 def is_optimized(image_list):
@@ -125,8 +125,7 @@ def optimize_depth(img_info, settings, execute=False):
         # already greyscale. no need to compress
         print(f"single channel: {img_info.image.name}")
     elif depth == 24:
-        # print(img_info.color_factor, img_info.image.name)
-        if img_info.color_factor < 0.1 * convert_greyscale:
+        if img_info.color_factor < 0.05 * convert_greyscale:
             # make into 8bit greyscale
             print(f"To 8bit >> {img_info.image.name}")
             img_info.size_optimized_mb /= 3  # 24bit/8bit = 3
@@ -155,7 +154,9 @@ def optimize_depth(img_info, settings, execute=False):
             # use to half precision if not already
             if not img_info.image.use_half_precision:
                 img_info.size_optimized_mb /= 2
-                img_info.use_16bit = True
+                img_info.read_as_half_precision = True
+            else:
+                img_info.read_as_half_precision = True
 
     else:
         print(f"Cannot handle bit depth {depth} for {img_info.image.name}")
@@ -203,6 +204,8 @@ def scan_image(img):
     img_info.alpha_factor = alpha_factor
     img_info.range_factor = range_factor
 
+    print(f"{img.name} >> Sharpness: {peak_sharpness} | Color: {color_factor} | Alpha: {alpha_factor} | Range: {range_factor}")
+
     return img_info
 
 
@@ -217,198 +220,30 @@ def update_memory_usage(self, context):
     }
 
     for img_info in context.scene.TC_texture_metadata:
-        img_info = compute_image_size(img_info)
+        img_nfo = compute_image_size(img_info)
         img_info = optimize_size(img_info, settings)
         img_info = optimize_depth(img_info, settings)
 
 
 def optimize_images(self, context):
     """Optimize all textures in the list."""
-    settings = {
-        "convert_greyscale": context.scene.TC_convert_greyscale,
-        "smart_resize": context.scene.TC_smart_resize,
-        "optimize_float": context.scene.TC_optimize_float,
-    }
-
     for img_info in context.scene.TC_texture_metadata:
         pro.optimize(img_info)
 
+    # set the flag to use optimized textures
+    context.scene.TC_texture_swap = "1"
+
+
+def update_texture_swap(self, context):
+    if context.scene.TC_texture_swap == "0":
+        # use original
+        pro.use_original(context.scene.TC_texture_metadata)
+    else:
+        # use optimized
+        pro.use_optimized(context.scene.TC_texture_metadata)
+
 
 def generate_html_report(image_info_list, show_optimized=True):
-    html_template = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Optimization Report</title>
-    <style>
-        html{{
-            scrollbar-gutter: stable;
-        }}
-        body {{
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #eee;
-            color: #333;
-        }}
-        h1, .total-savings {{
-            text-align: center;
-            color: #333;
-        }}
-        table {{
-            width: 80%;
-            border-collapse: collapse;
-            margin: 20px auto;
-            background-color: #fff;
-        }}
-        th, td {{
-            padding: 12px;
-            border: 1px solid #ddd;
-            text-align: right;
-        }}
-        th {{
-            background-color: #f4f4f4;
-            font-weight: bold;
-            text-align: center;
-        }}
-        th:nth-child(1) {{
-            width: 30%;
-        }}
-        th:nth-child(2) {{
-            width: 10%;
-        }}
-        th:nth-child(3) {{
-            width: 10%;
-        }}
-        th:nth-child(4) {{
-            width: 15%;
-        }}
-        th:nth-child(5) {{
-            width: 15%;
-        }}
-        th:nth-child(6) {{
-            width: 10%;
-        }}
-        th:nth-child(7) {{
-            width: 10%;
-        }}
-        .optimized {{
-            background-color: #ddeedd;
-        }}
-        .copy-icon {{
-            cursor: pointer;
-            margin-left: 5px;
-        }}
-        .toggle-button {{
-            margin: 20px;
-            text-align: center;
-        }}
-        .thumbnail {{
-            position: relative;
-            display: inline-block;
-        }}
-        .thumbnail:hover .thumbnail-image {{
-            visibility: visible;
-        }}
-        .thumbnail-image {{
-            visibility: hidden;
-            position: absolute;
-            z-index: 1;
-            width: 200px;
-            height: auto;
-            top: -10px;
-            left: 105%;
-            border: 1px solid #ddd;
-            background-color: white;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-            background-image: linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc),
-                              linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc);
-            background-size: 20px 20px;
-            background-position: 0 0, 10px 10px;
-        }}
-    </style>
-    <script>
-        function copyToClipboard(text) {{
-            navigator.clipboard.writeText(text).then(function() {{
-                console.log('Copied to clipboard successfully!');
-            }}, function(err) {{
-                console.error('Could not copy text: ', err);
-            }});
-        }}
-
-        function toggleImages() {{
-            var showOptimized = document.getElementById('toggleButton').checked;
-            var rows = document.getElementsByClassName('image-row');
-            for (var i = 0; i < rows.length; i++) {{
-                if (!showOptimized) {{
-                    rows[i].style.display = 'table-row';
-                }} else {{
-                    if (rows[i].classList.contains('optimized')) {{
-                        rows[i].style.display = 'table-row';
-                    }} else {{
-                        rows[i].style.display = 'none';
-                    }}
-                }}
-            }}
-        }}
-    </script>
-</head>
-<body onload="toggleImages()">
-    <h1>Texture Compactor Scanning Report</h1>
-    <div class="total-savings">
-        {total_savings}
-    </div>
-    <div class="toggle-button">
-        <label><input type="checkbox" id="toggleButton" onchange="toggleImages()" {checked}>Only Show Images Available for Optimization</label>
-    </div>
-    <table>
-        <thead>
-            <tr>
-                <th>Image Name</th>
-                <th>Original Bit Depth</th>
-                <th>New Bit Depth</th>
-                <th>Original Resolution</th>
-                <th>New Resolution</th>
-                <th>Texture Memory (MB)</th>
-                <th>Optimized Memory (MB)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {rows}
-        </tbody>
-    </table>
-    <div class="total-savings">
-        {notes}
-    </div>
-</body>
-</html>
-    """
-
-    row_template = """
-<tr class="image-row {highlight}">
-    <td title="{filepath}" style="text-align: left;">
-        <div class="thumbnail">
-            {name}
-            <img src="file://{filepath}" class="thumbnail-image" alt="{name}">
-        </div>
-        <span class="copy-icon" style="text-align: right;" onclick="copyToClipboard('{filepath}')">⧉</span>
-    </td>
-    <td>{original_bit_depth}</td>
-    <td>{new_bit_depth}</td>
-    <td>{original_resolution}</td>
-    <td>{new_resolution}</td>
-    <td style="width: 150px;">
-        <div style="width: 100%; height: 18px; display: flex; justify-content: space-between;">
-            <div style="background-color: #eee; height:100%; width:{size_percentage:.2f}%"></div>
-            <span>{size_original:.2f}</span>
-        </div>
-    </td>
-    <td>{size_optimized:.2f}</td>
-</tr>
-"""
-
     optimized_images = [info for info in image_info_list if info.size_optimized_mb < info.size_original_mb]
 
     # Sort by original size in descending order
@@ -426,7 +261,7 @@ def generate_html_report(image_info_list, show_optimized=True):
         else:
             original_bit_depth = f"{info.image.depth}bit"
 
-        if info.image.is_float and info.use_16bit:
+        if info.image.is_float and info.read_as_half_precision:
             new_bit_depth = f"{info.optimized_depth}bit(½)" if info.optimized_depth else f"{info.image.depth}bit(½)"
         else:
             new_bit_depth = f"{info.optimized_depth}bit" if info.optimized_depth else f"{info.image.depth}bit"
@@ -436,7 +271,7 @@ def generate_html_report(image_info_list, show_optimized=True):
         else:
             name = f"<span>{info.image.name}</span>"
         size_percentage = int((info.size_original_mb / total_before) * 100)
-        rows += row_template.format(
+        rows += web.row_template.format(
             name=name,
             filepath=os.path.abspath(bpy.path.abspath(info.image.filepath_raw, library=info.image.library)).replace("\\", "\\\\"),  # Escape backslashes for JavaScript
             size_original=info.size_original_mb,
@@ -453,7 +288,7 @@ def generate_html_report(image_info_list, show_optimized=True):
     BLURB = """ <a href="https://mikepan.com/">Texture Compactor</a>"""
     notes = f"Report Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')} by {BLURB}"
 
-    return html_template.format(
+    return web.html_template.format(
         rows=rows,
         total_savings=total_savings,
         notes=notes,
@@ -461,7 +296,9 @@ def generate_html_report(image_info_list, show_optimized=True):
     )
 
 
-def show_report(image_list, filename):
+def show_report(image_list):
+    filename = bpy.path.abspath(f"//{bpy.data.filepath}_texture_compactor_report.html")
+
     report = generate_html_report(image_list)
     with open(filename, "w") as file:
         file.write(report)

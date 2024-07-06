@@ -4,11 +4,12 @@ import concurrent.futures
 import bpy
 
 from texturecompactor import core
+from texturecompactor import settings
 
 
-class TEXTURECOMPACTOR_PT_main_panel(bpy.types.Panel):
+class TEXCOMPACTOR_PT_main_panel(bpy.types.Panel):
     bl_label = "Texture Compactor"
-    bl_idname = "TEXTURECOMPACTOR_PT_main_panel"
+    bl_idname = "TEXCOMPACTOR_PT_main_panel"
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context = "render"
@@ -19,14 +20,12 @@ class TEXTURECOMPACTOR_PT_main_panel(bpy.types.Panel):
         layout.use_property_decorate = False
         scene = context.scene
 
-        has_data = bool(context.scene.TC_texture_metadata)
-
         # always show
         col = layout.column()
         col.operator("texture_compactor.scan_textures", icon="FILE_REFRESH")
 
         # bail early if scanning isn't done
-        if not has_data:
+        if not context.scene.TC_texture_metadata:
             return
 
         # show the rest of the UI after scanning is done
@@ -67,7 +66,7 @@ class TEXTURECOMPACTOR_PT_main_panel(bpy.types.Panel):
             row = layout.row()
 
 
-class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
+class TEXCOMPACTOR_OT_scan_textures(bpy.types.Operator):
     bl_label = "Scan All Textures"
     bl_idname = "texture_compactor.scan_textures"
     bl_description = "Scan all textures in the scene and look for optimization opportunities"
@@ -88,7 +87,6 @@ class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
         # Ensure image is loaded by accessing its size first
         w, h = img.size
 
-        # Error on non-loaded images
         if w == 0 or h == 0:
             print(f"Image {img} is not loaded")
             return None
@@ -97,7 +95,6 @@ class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
             print(f"Image {img.name} has no pixel data")
             return None
 
-        # Skip images that are not used
         users = bpy.data.user_map(subset=[img])
         if not users[img]:
             print(f"Skipping orphan {img}")
@@ -133,6 +130,10 @@ class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
 
                     core.update_memory_usage(self, context)
                     wm.progress_end()
+
+                    if settings.AUTO_SHOW_REPORT:
+                        core.show_report(context.scene.TC_texture_metadata)
+
                     return {"FINISHED"}
 
         return {"PASS_THROUGH"}
@@ -147,7 +148,7 @@ class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
 
         wm = context.window_manager
         wm.progress_begin(0, self._total_images)
-        self._timer = wm.event_timer_add(0.5, window=context.window)
+        self._timer = wm.event_timer_add(0.1, window=context.window)
         wm.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
@@ -161,7 +162,7 @@ class TEXTURECOMPACTOR_OT_scan_textures(bpy.types.Operator):
         return {"CANCELLED"}
 
 
-class TEXTURECOMPACTOR_OT_optimize_textures(bpy.types.Operator):
+class TEXCOMPACTOR_OT_optimize_textures(bpy.types.Operator):
     bl_label = "Optimize Textures"
     bl_idname = "texture_compactor.optimize_textures"
     bl_description = "Optimize all textures used in the scene using the settings above"
@@ -173,12 +174,11 @@ class TEXTURECOMPACTOR_OT_optimize_textures(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class TEXTURECOMPACTOR_OT_show_report(bpy.types.Operator):
+class TEXCOMPACTOR_OT_show_report(bpy.types.Operator):
     bl_label = "Show Detailed Report"
     bl_idname = "texture_compactor.show_report"
     bl_description = "Show a detailed HTML report of all textures in the scene in the web browser"
 
     def execute(self, context):
-        filename = bpy.path.abspath(f"//{bpy.data.filepath}_texture_compactor_report.html")
-        core.show_report(context.scene.TC_texture_metadata, filename)
+        core.show_report(context.scene.TC_texture_metadata)
         return {"FINISHED"}

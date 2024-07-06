@@ -1,5 +1,7 @@
 from texturecompactor import settings
 import bpy
+import hashlib
+import os
 
 
 def optimize(img_info):
@@ -20,20 +22,41 @@ def optimize(img_info):
         colorspace_original = image.colorspace_settings.name
         image.colorspace_settings.name = "Non-Color"
 
-        # get file extension of filepath
+        # set up new file path
         filepath_original = image.filepath_raw
         ext = filepath_original.split(".")[-1]
-        filepath_new = filepath_original.replace(ext, "optimized1.png")
 
-        # deal with library assets
-        filepath_new = bpy.path.abspath(filepath_new, library=image.library)
+        if settings.USE_CENTRAL_CACHE:
+            # hash the filepath to avoid conflicts of multiple images with the same name like albedo.png
+            hash_object = hashlib.md5(filepath_original.encode())
+            hashed_filepath = hash_object.hexdigest()
+
+            # Set the folder path for optimized images
+            folder_path = os.path.join(os.path.dirname(bpy.data.filepath), "tc_optimized")
+
+            # Create the folder if it doesn't exist
+            os.makedirs(folder_path, exist_ok=True)
+
+            # Set the new file path
+            filepath_new = os.path.join(folder_path, f"{hashed_filepath}.png")
+        else:
+            filepath_new = filepath_original.replace(ext, "TC_optimized.png")
+            filepath_new = filepath_original.replace(ext, f"TC_optimized_{hashed_filepath}.png")
+
+            # deal with library assets
+            filepath_new = bpy.path.abspath(filepath_new, library=image.library)
 
         scene = bpy.context.scene
-        # scene.view_settings.view_transform = "Standard"
         scene.render.image_settings.file_format = "PNG"
-        scene.render.image_settings.color_mode = "BW"
-        scene.render.image_settings.color_depth = "8"
         scene.render.image_settings.compression = 15
+        scene.render.image_settings.color_depth = "8"
+
+        if img_info.optimized_depth == 8:
+            scene.render.image_settings.color_mode = "BW"
+        elif img_info.optimized_depth == 24:
+            scene.render.image_settings.color_mode = "RGB"
+        else:
+            raise (f"Invalid depth {img_info.optimized_depth} for {image.name}")
 
         image.save_render(bpy.path.abspath(filepath_new), scene=scene)
 
@@ -76,15 +99,15 @@ def convert_to_dxt1(image):
     return True
 
 
-def revert_to_original(image_list):
+def use_original(image_list):
     for img in image_list:
-        img.image.filepath_raw = img.original_path
-        img.image.reload()
-        print(f"Reverted {img.image.name} to original")
+        if img.original_path:
+            img.image.filepath_raw = img.original_path
+            img.image.reload()
 
 
-def revert_to_optimized(image_list):
+def use_optimized(image_list):
     for img in image_list:
-        img.image.filepath_raw = img.optimized_path
-        img.image.reload()
-        print(f"Reverted {img.image.name} to optimized")
+        if img.optimized_path:
+            img.image.filepath_raw = img.optimized_path
+            img.image.reload()

@@ -29,17 +29,16 @@ from texturecompactor import core
 
 
 classes = (
-    ui.TEXTURECOMPACTOR_PT_main_panel,
-    ui.TEXTURECOMPACTOR_OT_scan_textures,
-    ui.TEXTURECOMPACTOR_OT_optimize_textures,
-    ui.TEXTURECOMPACTOR_OT_show_report,
+    ui.TEXCOMPACTOR_PT_main_panel,
+    ui.TEXCOMPACTOR_OT_scan_textures,
+    ui.TEXCOMPACTOR_OT_optimize_textures,
+    ui.TEXCOMPACTOR_OT_show_report,
 )
 
 
 @bpy.app.handlers.persistent
 def clear_addon_data(dummy):
     # Clear or reset your addon data here
-    print("New file loaded, clearing addon data...")
     bpy.context.scene.TC_texture_metadata.clear()
     bpy.context.scene.TC_texture_metadata = []
 
@@ -54,7 +53,7 @@ def register():
         items=[
             ("0", "Off", "Do nothing"),
             ("1", "Safe", "Optimize when there is no visible difference"),
-            ("2", "Aggressive", "Use a higher tolerance, might make less colorful textures greyscale"),
+            ("2", "Aggressive", "Use a higher tolerance, might make less colorful textures completely grey"),
         ],
         name="Convert to Greyscale",
         default="1",
@@ -66,7 +65,7 @@ def register():
         items=[
             ("0", "Off", "Do nothing"),
             ("1", "Safe", "Optimize when there is no visible difference"),
-            ("2", "Aggressive", "Use a higher tolerance to find more textures that can be resized safely"),
+            ("2", "Aggressive", "Use a higher tolerance to find more textures that can be resized"),
         ],
         name="Smart Resize",
         default="1",
@@ -78,7 +77,7 @@ def register():
         items=[
             ("0", "Off", "Do nothing"),
             ("1", "Safe", "Set all float texture to be read at half-precision (16-bit)"),
-            ("2", "Aggressive", "Try to convert greyscale float textures to 16-bit integers"),
+            ("2", "Aggressive", "Not Implemented Yet"),
         ],
         name="Float Textures",
         default="1",
@@ -91,6 +90,7 @@ def register():
         name="Switch Textures",
         options=set(),
         default="0",
+        update=core.update_texture_swap,
     )
 
     bpy.types.Scene.TC_texture_metadata = []
