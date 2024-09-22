@@ -4,6 +4,10 @@ This Blender addon automatically optimizes textures to lower memory usage when r
 
 WARNING: This is a tool I wrote for myself and is in preview stage. Please back up your Blender file before running this addon in case the addon does something stupid.
 
+# Install
+1. Tap on the green "Code" button at the top of the page and then select "Download Zip".
+2. Use the Blender preference panel to install the the zip file.
+
 # How to Use Texture Compactor
 Open a Blender file, Click on "Scan All Textures", after the computer is finished thinking, you can decide how aggressive you want to optimize your textures based on the memory estimate it provides.
 
