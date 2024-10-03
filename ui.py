@@ -3,8 +3,8 @@ import concurrent.futures
 
 import bpy
 
-from texturecompactor import core
-from texturecompactor import settings
+from . import core
+from . import settings
 
 
 class TEXCOMPACTOR_PT_main_panel(bpy.types.Panel):
