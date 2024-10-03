@@ -3,9 +3,9 @@ import time
 import bpy
 import os
 
-from texturecompactor import web
-from texturecompactor import settings
-from texturecompactor import pro
+from . import web
+from . import settings
+from . import pro
 
 # TODO: 16/32 bit float images
 # TODO: image sequence support

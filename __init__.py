@@ -24,8 +24,8 @@ bl_info = {
 
 import bpy
 
-from texturecompactor import ui
-from texturecompactor import core
+from . import ui
+from . import core
 
 
 classes = (

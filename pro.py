@@ -1,4 +1,4 @@
-from texturecompactor import settings
+from . import settings
 import bpy
 import hashlib
 import os
