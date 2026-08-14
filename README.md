@@ -4,6 +4,9 @@ This Blender addon automatically optimizes textures to lower memory usage when r
 
 WARNING: This is a tool I wrote for myself and is in preview stage. Please back up your Blender file before running this addon in case the addon does something stupid.
 
+# Deprecated Warning
+As of Blender 5.2, Cycles is able to automatically manage the texture cache and generate mipmaps when necessary. This addon is no longer needed in most of the cases.
+
 # Install
 1. Tap on the green "Code" button at the top of the page and then select "Download Zip".
 2. Use the Blender preference panel to install the the zip file.
